@@ -1,0 +1,22 @@
+{
+  "name": "docebo-elevenlabs-middleware",
+  "version": "1.0.0",
+  "description": "Railway middle layer connecting Docebo LMS and ElevenLabs Conversational AI",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
