@@ -1,8 +1,8 @@
 require('dotenv').config();
 
-const express    = require('express');
-const xapiRoutes = require('./routes/xapi');
-const elRoutes   = require('./routes/elevenlabs');
+const express       = require('express');
+const courseRoutes  = require('./routes/xapi');
+const elRoutes      = require('./routes/elevenlabs');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -18,8 +18,8 @@ app.get('/health', (_req, res) => {
 });
 
 // ── Routes ───────────────────────────────────────────────────────────────────
-// Docebo sends xAPI statements to /xapi/statements (configured in course settings)
-app.use('/xapi', xapiRoutes);
+// Docebo calls this plain REST endpoint when a learner opens the course
+app.use('/course', courseRoutes);
 
 // ElevenLabs fires completion webhook here when session ends
 app.use('/webhooks/elevenlabs', elRoutes);
@@ -35,7 +35,7 @@ app.use((err, _req, res, _next) => {
 
 app.listen(PORT, () => {
   console.log(`[SERVER] Middleware running on port ${PORT}`);
-  console.log(`[SERVER] xAPI receiver : POST /xapi/statements`);
-  console.log(`[SERVER] ElevenLabs   : POST /webhooks/elevenlabs/done`);
-  console.log(`[SERVER] Update method : ${process.env.DOCEBO_UPDATE_METHOD || 'both'}`);
+  console.log(`[SERVER] Docebo launch  : POST /course/launch`);
+  console.log(`[SERVER] ElevenLabs     : POST /webhooks/elevenlabs/done`);
+  console.log(`[SERVER] Update method  : ${process.env.DOCEBO_UPDATE_METHOD || 'both'}`);
 });
