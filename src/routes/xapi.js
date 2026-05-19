@@ -3,31 +3,30 @@ const router            = express.Router();
 const elevenLabsService = require('../services/elevenlabs');
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET  /launch   — Docebo may call via GET with query string params
-// POST /launch   — Docebo may call via POST with form or query params
+// GET  /launch        → https://your-app.up.railway.app/launch
+// POST /launch        → https://your-app.up.railway.app/launch
+// GET  /course/launch → https://your-app.up.railway.app/course/launch
+// POST /course/launch → https://your-app.up.railway.app/course/launch
 //
-// Parameters sent by Docebo (as query params or form-encoded body):
-//   endpoint    - the LRS/launch endpoint (informational, logged)
-//   auth        - auth token Docebo passes (informational, logged)
-//   user_id     - Docebo internal user ID
+// Docebo sends these query/form parameters:
+//   endpoint    - LRS endpoint (informational)
+//   auth        - auth token (informational)
+//   user_id     - Docebo user ID
 //   course_id   - Docebo course ID
-//   username    - learner username / login
-//   course_code - course code / reference
-//   actor       - JSON string: {"mbox":["mailto:user@example.com"],"name":["Full Name"]}
-//
-// Response:
-//   Redirects the learner straight into the ElevenLabs signed session URL
-//   OR returns JSON with the URL (depending on how Docebo handles the response)
+//   username    - learner username
+//   course_code - course reference code
+//   actor       - JSON string e.g. {"mbox":["mailto:user@co.com"],"name":["Full Name"]}
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function launchHandler(req, res) {
   try {
-    // Merge query params + body so we catch params regardless of GET or POST
+    // Merge query string + body — works for GET and POST
     const params = Object.assign({}, req.query, req.body);
 
-    console.log('[LAUNCH] Raw params received:', JSON.stringify(params, null, 2));
+    console.log(`[LAUNCH] ${req.method} ${req.originalUrl}`);
+    console.log('[LAUNCH] Params:', JSON.stringify(params, null, 2));
 
-    // ── Extract standard Docebo parameters ────────────────────────────────
+    // ── Extract Docebo parameters ─────────────────────────────────────────
     const userId     = params.user_id     || params.userId     || '';
     const courseId   = params.course_id   || params.courseId   || '';
     const username   = params.username    || '';
@@ -35,10 +34,10 @@ async function launchHandler(req, res) {
     const endpoint   = params.endpoint   || '';
     const auth       = params.auth       || '';
 
-    // ── Parse actor JSON string ───────────────────────────────────────────
-    // actor = '{"mbox":["mailto:user@company.com"],"name":["Full Name"]}'
+    // ── Parse actor JSON ──────────────────────────────────────────────────
+    // Docebo sends: {"mbox":["mailto:user@company.com"],"name":["Full Name"]}
     let userEmail = '';
-    let userName  = '';
+    let userName  = username;
 
     if (params.actor) {
       try {
@@ -46,34 +45,32 @@ async function launchHandler(req, res) {
           ? JSON.parse(params.actor)
           : params.actor;
 
-        // mbox is an array like ["mailto:user@company.com"]
-        const mbox = Array.isArray(actor.mbox) ? actor.mbox[0] : actor.mbox || '';
-        userEmail  = mbox.replace('mailto:', '').trim();
+        // mbox array → strip "mailto:" prefix
+        const mboxRaw = Array.isArray(actor.mbox) ? actor.mbox[0] : (actor.mbox || '');
+        userEmail     = mboxRaw.replace('mailto:', '').trim();
 
-        // name is an array like ["Full Name"]
-        userName   = Array.isArray(actor.name) ? actor.name[0] : actor.name || username;
+        // name array → first element
+        userName = Array.isArray(actor.name)
+          ? actor.name[0]
+          : (actor.name || username);
 
-      } catch (parseErr) {
-        console.warn('[LAUNCH] Could not parse actor JSON:', params.actor, parseErr.message);
-        userName = username; // fall back to username param
+      } catch (e) {
+        console.warn('[LAUNCH] Failed to parse actor — using fallback:', e.message);
       }
-    } else {
-      userName = username;
     }
 
-    console.log(`[LAUNCH] endpoint=${endpoint} | user_id=${userId} | course_id=${courseId}`);
-    console.log(`[LAUNCH] username=${username} | course_code=${courseCode}`);
-    console.log(`[LAUNCH] actor → email=${userEmail} | name=${userName}`);
+    console.log(`[LAUNCH] → user_id=${userId} | course_id=${courseId} | email=${userEmail} | name=${userName} | course_code=${courseCode}`);
 
     // ── Validate required fields ──────────────────────────────────────────
     if (!userId || !courseId) {
+      console.error('[LAUNCH] Missing user_id or course_id. Received keys:', Object.keys(params));
       return res.status(400).json({
-        error:   'Missing required parameters: user_id and course_id are required',
-        received: Object.keys(params),
+        error:          'Missing required parameters: user_id and course_id',
+        received_keys:  Object.keys(params),
       });
     }
 
-    // ── Create signed ElevenLabs session ──────────────────────────────────
+    // ── Create ElevenLabs signed session ──────────────────────────────────
     const session = await elevenLabsService.createSignedSession({
       userId,
       courseId,
@@ -82,16 +79,15 @@ async function launchHandler(req, res) {
       courseName: courseCode || `Course ${courseId}`,
     });
 
-    console.log(`[LAUNCH] Session created — conv=${session.conversationId} url=${session.signedUrl}`);
+    console.log(`[LAUNCH] ✓ Session created — conv=${session.conversationId}`);
 
-    // ── Redirect learner straight into ElevenLabs ─────────────────────────
-    // If Docebo opens this URL in a browser/iframe, the learner lands
-    // directly in the ElevenLabs conversational AI interface.
-    // If Docebo expects a JSON response instead, comment out the redirect
-    // and uncomment the res.json() block below.
+    // ── Redirect learner into ElevenLabs ──────────────────────────────────
+    // 302 redirect sends the learner's browser straight to ElevenLabs.
+    // If Docebo instead reads the response body, comment out the redirect
+    // and uncomment the JSON block below.
     return res.redirect(302, session.signedUrl);
 
-    // ── Alternative: return JSON (use this if Docebo reads the response) ──
+    // ── JSON response alternative (comment out redirect above to use) ─────
     // return res.status(200).json({
     //   success:         true,
     //   elevenlabs_url:  session.signedUrl,
@@ -100,11 +96,11 @@ async function launchHandler(req, res) {
 
   } catch (err) {
     console.error('[LAUNCH] Error:', err.message, err.stack);
-    return res.status(500).json({ error: 'Failed to create ElevenLabs session' });
+    return res.status(500).json({ error: 'Failed to create ElevenLabs session', detail: err.message });
   }
 }
 
-// Handle both GET and POST on /launch
+// Register both paths — Express strips the mount prefix so we only need /launch here
 router.get('/launch',  launchHandler);
 router.post('/launch', launchHandler);
 
