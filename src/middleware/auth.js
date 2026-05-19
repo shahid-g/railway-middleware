@@ -36,18 +36,4 @@ function verifyElevenLabsSignature(req, res, next) {
   next();
 }
 
-/**
- * Validates that an incoming request carries a valid xAPI version header.
- * Docebo (and any xAPI-compliant LMS) must include X-Experience-API-Version.
- */
-function requireXapiVersion(req, res, next) {
-  const version = req.headers['x-experience-api-version'];
-  if (!version) {
-    return res.status(400).json({ error: 'Missing X-Experience-API-Version header' });
-  }
-  // Attach so downstream handlers can echo it back
-  req.xapiVersion = version;
-  next();
-}
-
-module.exports = { verifyElevenLabsSignature, requireXapiVersion };
+module.exports = { verifyElevenLabsSignature };
