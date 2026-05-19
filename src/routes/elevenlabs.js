@@ -2,12 +2,14 @@ const express   = require('express');
 const router    = express.Router();
 const { verifyElevenLabsSignature } = require('../middleware/auth');
 const doceboService                 = require('../services/docebo');
+const { getSession, getConversation } = require('../services/elevenlabs');
 
 /**
  * POST /webhooks/elevenlabs/done
  *
  * Fired by ElevenLabs when a Conversational AI session ends.
- * Parses transcript + parameters → updates Docebo via REST API and/or xAPI.
+ * Looks up Docebo user/course context from the in-memory session store
+ * (keyed by conversationId) then updates Docebo via REST API and/or xAPI.
  */
 router.post('/done', verifyElevenLabsSignature, async (req, res) => {
   // ACK immediately — ElevenLabs requires a fast 200
@@ -15,29 +17,49 @@ router.post('/done', verifyElevenLabsSignature, async (req, res) => {
 
   try {
     const payload = req.body;
-    console.log('[ElevenLabs] Completion webhook received:', JSON.stringify(payload, null, 2));
+    console.log('[ElevenLabs Webhook] Received:', JSON.stringify(payload, null, 2));
 
-    // ── Parse ElevenLabs completion payload ───────────────────────────────
-    // Adjust field names to match the exact ElevenLabs webhook schema
-    // for your agent version.
     const {
-      conversation_id:    conversationId,
-      transcript        = [],
-      analysis          = {},
-      metadata          = {},
-      call_duration_secs: durationSecs = 0,
+      conversation_id:     conversationId,
+      transcript         = [],
+      analysis           = {},
+      call_duration_secs:  durationSecs = 0,
     } = payload;
 
-    // User + course context was embedded in the session metadata at launch time
-    const userId   = metadata.userId   || metadata.user_id;
-    const courseId = metadata.courseId || metadata.course_id;
+    // ── Resolve Docebo context ────────────────────────────────────────────
+    // Priority 1: payload.metadata (if ElevenLabs echoes it back)
+    // Priority 2: in-memory session store (keyed by conversationId)
+    // Priority 3: fetch full conversation from ElevenLabs API
+    let userId   = payload.metadata?.userId   || payload.metadata?.user_id;
+    let courseId = payload.metadata?.courseId || payload.metadata?.course_id;
+
+    if ((!userId || !courseId) && conversationId) {
+      const stored = getSession(conversationId);
+      if (stored) {
+        userId   = stored.userId;
+        courseId = stored.courseId;
+        console.log(`[ElevenLabs Webhook] Context from session store — user=${userId} course=${courseId}`);
+      }
+    }
+
+    if ((!userId || !courseId) && conversationId) {
+      // Last resort: fetch full conversation from ElevenLabs API
+      try {
+        console.log(`[ElevenLabs Webhook] Fetching full conversation from API — conv=${conversationId}`);
+        const conv = await getConversation(conversationId);
+        userId   = conv?.metadata?.userId   || conv?.metadata?.user_id   || userId;
+        courseId = conv?.metadata?.courseId || conv?.metadata?.course_id || courseId;
+      } catch (fetchErr) {
+        console.warn('[ElevenLabs Webhook] Could not fetch conversation from API:', fetchErr.message);
+      }
+    }
 
     if (!userId || !courseId) {
-      console.error('[ElevenLabs] Missing userId/courseId in metadata — cannot update Docebo');
+      console.error('[ElevenLabs Webhook] Cannot update Docebo — userId/courseId not resolved. Conv:', conversationId);
       return;
     }
 
-    // ── Format transcript as readable text ────────────────────────────────
+    // ── Format transcript ─────────────────────────────────────────────────
     const transcriptText = transcript
       .map(t => `[${(t.role || 'UNKNOWN').toUpperCase()}]: ${t.message || t.content || ''}`)
       .join('\n');
@@ -56,28 +78,26 @@ router.post('/done', verifyElevenLabsSignature, async (req, res) => {
 
     const method = process.env.DOCEBO_UPDATE_METHOD || 'both';
 
-    // ── Option A: Docebo REST API ─────────────────────────────────────────
     if (method === 'rest' || method === 'both') {
       try {
         await doceboService.updateViaRestApi(updatePayload);
-        console.log(`[ElevenLabs] Docebo REST updated — user=${userId} course=${courseId}`);
+        console.log(`[ElevenLabs Webhook] ✓ Docebo REST updated — user=${userId} course=${courseId}`);
       } catch (err) {
-        console.error('[ElevenLabs] Docebo REST update failed:', err.message);
+        console.error('[ElevenLabs Webhook] Docebo REST update failed:', err.message);
       }
     }
 
-    // ── Option B: xAPI Statement ──────────────────────────────────────────
     if (method === 'xapi' || method === 'both') {
       try {
         await doceboService.updateViaXapi(updatePayload);
-        console.log(`[ElevenLabs] xAPI statement sent — user=${userId} course=${courseId}`);
+        console.log(`[ElevenLabs Webhook] ✓ xAPI statement sent — user=${userId} course=${courseId}`);
       } catch (err) {
-        console.error('[ElevenLabs] xAPI update failed:', err.message);
+        console.error('[ElevenLabs Webhook] xAPI update failed:', err.message);
       }
     }
 
   } catch (err) {
-    console.error('[ElevenLabs] Completion handler error:', err.message, err.stack);
+    console.error('[ElevenLabs Webhook] Handler error:', err.message, err.stack);
   }
 });
 
