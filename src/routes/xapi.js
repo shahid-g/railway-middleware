@@ -411,7 +411,9 @@ async function launchHandler(req, res) {
 
       if (type === 'ping') {
         // Echo pong back
-        ws.send(JSON.stringify({ type: 'pong', event_id: msg.event_id }));
+        // ElevenLabs nests event_id inside ping_event: { type:'ping', ping_event:{ event_id: 123 } }
+        const eventId = (msg.ping_event && msg.ping_event.event_id !== undefined) ? msg.ping_event.event_id : msg.event_id;
+        ws.send(JSON.stringify({ type: 'pong', event_id: eventId }));
         return;
       }
 
