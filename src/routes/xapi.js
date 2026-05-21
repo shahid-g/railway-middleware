@@ -45,12 +45,11 @@ async function launchHandler(req, res) {
 
     console.log(`[LAUNCH] ✓ Session ready — conv=${session.conversationId}`);
 
-    const agentId   = process.env.ELEVENLABS_AGENT_ID;
     const signedUrl = session.signedUrl;
+    const displayName = userName || 'Learner';
+    const displayCourse = courseCode || `Course ${courseId}`;
 
-    // ── Return a chat-only HTML page using the ElevenLabs JS SDK ──────────
-    // The convai widget defaults to voice mode. For a chat-only agent we
-    // use the @11labs/client SDK directly via CDN and disable audio entirely.
+    // ── Chat page using native browser WebSocket — no CDN dependency ──────
     return res.status(200).send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -66,7 +65,6 @@ async function launchHandler(req, res) {
       color: #e8e9f0;
       height: 100vh;
       display: flex;
-      flex-direction: column;
       align-items: center;
       justify-content: center;
       padding: 1rem;
@@ -78,12 +76,14 @@ async function launchHandler(req, res) {
       border-radius: 16px;
       width: 100%;
       max-width: 640px;
-      height: 90vh;
+      height: min(90vh, 700px);
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
     }
 
+    /* Header */
     .chat-header {
       padding: 1rem 1.25rem;
       border-bottom: 1px solid #2e3250;
@@ -91,32 +91,39 @@ async function launchHandler(req, res) {
       align-items: center;
       gap: 0.75rem;
       background: #212436;
+      flex-shrink: 0;
     }
-
     .avatar {
-      width: 40px; height: 40px;
-      border-radius: 50%;
+      width: 40px; height: 40px; border-radius: 50%;
       background: linear-gradient(135deg, #3b82f6, #a855f7);
       display: flex; align-items: center; justify-content: center;
-      font-size: 1.2rem;
-      flex-shrink: 0;
+      font-size: 1.2rem; flex-shrink: 0;
     }
-
     .header-text h2 { font-size: 1rem; font-weight: 600; }
     .header-text p  { font-size: 0.75rem; color: #8b8fa8; }
-
-    .status-dot {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: #22c55e;
+    .conn-badge {
       margin-left: auto;
-      flex-shrink: 0;
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 99px;
+      background: rgba(245,158,11,0.15);
+      color: #f59e0b;
+      border: 1px solid rgba(245,158,11,0.3);
+      transition: all 0.3s;
     }
-    .status-dot.connecting { background: #f59e0b; animation: pulse 1s infinite; }
-    .status-dot.error      { background: #f43f5e; animation: none; }
+    .conn-badge.connected {
+      background: rgba(34,197,94,0.15);
+      color: #22c55e;
+      border-color: rgba(34,197,94,0.3);
+    }
+    .conn-badge.error {
+      background: rgba(244,63,94,0.15);
+      color: #f43f5e;
+      border-color: rgba(244,63,94,0.3);
+    }
 
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
-
-    /* Messages area */
+    /* Messages */
     #messages {
       flex: 1;
       overflow-y: auto;
@@ -124,21 +131,20 @@ async function launchHandler(req, res) {
       display: flex;
       flex-direction: column;
       gap: 0.75rem;
-      scroll-behavior: smooth;
     }
-
     #messages::-webkit-scrollbar { width: 4px; }
-    #messages::-webkit-scrollbar-track { background: transparent; }
     #messages::-webkit-scrollbar-thumb { background: #2e3250; border-radius: 2px; }
 
     .msg {
-      max-width: 80%;
+      max-width: 82%;
       padding: 0.65rem 1rem;
       border-radius: 12px;
       font-size: 0.9rem;
-      line-height: 1.5;
+      line-height: 1.55;
       word-break: break-word;
+      animation: fadeIn 0.2s ease;
     }
+    @keyframes fadeIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
 
     .msg.agent {
       background: #212436;
@@ -146,7 +152,6 @@ async function launchHandler(req, res) {
       align-self: flex-start;
       border-bottom-left-radius: 4px;
     }
-
     .msg.user {
       background: #1e3a5f;
       border: 1px solid #2a4a7a;
@@ -154,7 +159,6 @@ async function launchHandler(req, res) {
       border-bottom-right-radius: 4px;
       color: #bfdbfe;
     }
-
     .msg.system {
       align-self: center;
       background: transparent;
@@ -162,22 +166,22 @@ async function launchHandler(req, res) {
       font-size: 0.75rem;
       color: #555a72;
       font-style: italic;
+      max-width: 100%;
+      text-align: center;
     }
-
-    .msg .sender {
-      font-size: 0.7rem;
-      font-weight: 600;
-      color: #8b8fa8;
-      margin-bottom: 0.3rem;
+    .msg .label {
+      font-size: 0.68rem;
+      font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.5px;
+      margin-bottom: 0.3rem;
+      color: #8b8fa8;
     }
+    .msg.agent .label { color: #a78bfa; }
+    .msg.user  .label { color: #60a5fa; }
 
-    .msg.agent .sender { color: #a855f7; }
-    .msg.user  .sender { color: #3b82f6; }
-
-    /* Typing indicator */
-    .typing {
+    /* Typing dots */
+    #typing {
       display: none;
       align-self: flex-start;
       padding: 0.65rem 1rem;
@@ -185,26 +189,31 @@ async function launchHandler(req, res) {
       border: 1px solid #2e3250;
       border-radius: 12px;
       border-bottom-left-radius: 4px;
+      gap: 4px;
+      align-items: center;
     }
-    .typing.visible { display: flex; gap: 4px; align-items: center; }
-    .typing span {
+    #typing.show { display: flex; }
+    #typing span {
       width: 7px; height: 7px; border-radius: 50%;
       background: #8b8fa8;
-      animation: bounce 1.2s infinite;
+      animation: bounce 1.1s infinite;
     }
-    .typing span:nth-child(2) { animation-delay: 0.2s; }
-    .typing span:nth-child(3) { animation-delay: 0.4s; }
-    @keyframes bounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-6px)} }
+    #typing span:nth-child(2) { animation-delay: 0.18s; }
+    #typing span:nth-child(3) { animation-delay: 0.36s; }
+    @keyframes bounce {
+      0%,60%,100% { transform: translateY(0); }
+      30%          { transform: translateY(-7px); }
+    }
 
-    /* Input area */
+    /* Input */
     .input-area {
       padding: 0.875rem 1rem;
       border-top: 1px solid #2e3250;
       display: flex;
-      gap: 0.5rem;
+      gap: 0.6rem;
       background: #212436;
+      flex-shrink: 0;
     }
-
     #user-input {
       flex: 1;
       background: #0f1117;
@@ -216,14 +225,13 @@ async function launchHandler(req, res) {
       font-family: inherit;
       resize: none;
       outline: none;
-      transition: border-color 0.15s;
       min-height: 42px;
       max-height: 120px;
+      transition: border-color 0.15s;
     }
-
-    #user-input:focus { border-color: #3b82f6; }
-    #user-input::placeholder { color: #555a72; }
+    #user-input:focus   { border-color: #3b82f6; }
     #user-input:disabled { opacity: 0.4; cursor: not-allowed; }
+    #user-input::placeholder { color: #555a72; }
 
     #send-btn {
       background: #3b82f6;
@@ -234,140 +242,219 @@ async function launchHandler(req, res) {
       font-size: 0.9rem;
       font-weight: 600;
       cursor: pointer;
+      height: 42px;
+      align-self: flex-end;
       transition: background 0.15s, opacity 0.15s;
       white-space: nowrap;
-      align-self: flex-end;
-      height: 42px;
     }
-
     #send-btn:hover:not(:disabled) { background: #2563eb; }
     #send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-    #status-bar {
-      text-align: center;
-      font-size: 0.75rem;
-      color: #555a72;
-      padding: 0.4rem;
-      border-top: 1px solid #2e3250;
-    }
   </style>
 </head>
 <body>
-
 <div class="chat-container">
+
   <div class="chat-header">
     <div class="avatar">🤖</div>
     <div class="header-text">
       <h2>AI Learning Assistant</h2>
-      <p>${userName ? 'Welcome, ' + userName : 'Type your message to begin'}</p>
+      <p>${displayName} · ${displayCourse}</p>
     </div>
-    <div class="status-dot connecting" id="status-dot"></div>
+    <div class="conn-badge" id="conn-badge">Connecting…</div>
   </div>
 
   <div id="messages">
     <div class="msg system">Connecting to your AI assistant…</div>
   </div>
-
-  <div class="typing" id="typing">
-    <span></span><span></span><span></span>
-  </div>
+  <div id="typing"><span></span><span></span><span></span></div>
 
   <div class="input-area">
-    <textarea
-      id="user-input"
-      placeholder="Type your message and press Enter or Send…"
-      rows="1"
-      disabled
-    ></textarea>
+    <textarea id="user-input" placeholder="Type your message and press Enter…" rows="1" disabled></textarea>
     <button id="send-btn" disabled>Send</button>
   </div>
 
-  <div id="status-bar">Initialising…</div>
 </div>
 
-<!--
-  ElevenLabs JS client SDK (UMD build from CDN).
-  Used instead of the convai widget so we can drive chat-only mode
-  and handle text input/output ourselves.
--->
-<script src="https://cdn.jsdelivr.net/npm/@11labs/client@latest/dist/index.umd.js"></script>
-
 <script>
-(async () => {
-  const signedUrl   = ${JSON.stringify(signedUrl)};
-  const agentId     = ${JSON.stringify(agentId)};
-  const userName    = ${JSON.stringify(userName || 'Learner')};
+(function () {
+  // ── Config injected server-side ──────────────────────────────────────────
+  const SIGNED_URL  = ${JSON.stringify(signedUrl)};
+  const USER_NAME   = ${JSON.stringify(displayName)};
 
-  const messagesEl  = document.getElementById('messages');
-  const inputEl     = document.getElementById('user-input');
-  const sendBtn     = document.getElementById('send-btn');
-  const typingEl    = document.getElementById('typing');
-  const statusBar   = document.getElementById('status-bar');
-  const statusDot   = document.getElementById('status-dot');
+  // ── DOM refs ─────────────────────────────────────────────────────────────
+  const msgsEl  = document.getElementById('messages');
+  const inputEl = document.getElementById('user-input');
+  const sendBtn = document.getElementById('send-btn');
+  const typingEl= document.getElementById('typing');
+  const badge   = document.getElementById('conn-badge');
 
-  let conversation  = null;
+  let ws           = null;
+  let pingInterval = null;
 
   // ── UI helpers ────────────────────────────────────────────────────────────
-  function addMessage(role, text) {
-    const lastSystem = messagesEl.querySelector('.msg.system:last-child');
-    if (lastSystem) lastSystem.remove();
+  function addMsg(role, text) {
+    // Remove "Connecting…" system message on first real message
+    const sys = msgsEl.querySelector('.msg.system');
+    if (sys) sys.remove();
 
-    const div = document.createElement('div');
+    const div  = document.createElement('div');
     div.className = 'msg ' + role;
 
     if (role !== 'system') {
-      const sender = document.createElement('div');
-      sender.className = 'sender';
-      sender.textContent = role === 'agent' ? 'AI Assistant' : userName;
-      div.appendChild(sender);
+      const lbl = document.createElement('div');
+      lbl.className = 'label';
+      lbl.textContent = role === 'agent' ? 'AI Assistant' : USER_NAME;
+      div.appendChild(lbl);
     }
 
-    const text_node = document.createElement('div');
-    text_node.textContent = text;
-    div.appendChild(text_node);
-    messagesEl.appendChild(div);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    const body = document.createElement('div');
+    body.textContent = text;
+    div.appendChild(body);
+    msgsEl.appendChild(div);
+    msgsEl.scrollTop = msgsEl.scrollHeight;
   }
 
-  function setStatus(text, dotClass) {
-    statusBar.textContent = text;
-    statusDot.className = 'status-dot ' + (dotClass || '');
+  function setBadge(text, cls) {
+    badge.textContent = text;
+    badge.className   = 'conn-badge ' + (cls || '');
   }
 
-  function setInputEnabled(enabled) {
-    inputEl.disabled  = !enabled;
-    sendBtn.disabled  = !enabled;
-    if (enabled) inputEl.focus();
+  function setEnabled(on) {
+    inputEl.disabled = !on;
+    sendBtn.disabled = !on;
+    if (on) inputEl.focus();
   }
 
   // ── Send message ──────────────────────────────────────────────────────────
-  async function sendMessage() {
+  function sendMessage() {
     const text = inputEl.value.trim();
-    if (!text || !conversation) return;
+    if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
 
+    addMsg('user', text);
     inputEl.value = '';
     inputEl.style.height = 'auto';
-    addMessage('user', text);
-    setInputEnabled(false);
-    typingEl.classList.add('visible');
+    setEnabled(false);
+    typingEl.classList.add('show');
 
-    try {
-      // ElevenLabs client sendMessage for text/chat agents
-      await conversation.sendMessage(text);
-    } catch (err) {
-      typingEl.classList.remove('visible');
-      addMessage('system', 'Error sending message: ' + err.message);
-      setInputEnabled(true);
-    }
+    // ElevenLabs text input message format
+    ws.send(JSON.stringify({
+      user_activity: {
+        type: 'conversation_interaction',
+        input_mode: 'text',
+        text: text,
+      },
+    }));
   }
 
-  // ── Auto-resize textarea ──────────────────────────────────────────────────
+  // ── WebSocket connection ──────────────────────────────────────────────────
+  function connect() {
+    ws = new WebSocket(SIGNED_URL);
+
+    ws.onopen = () => {
+      console.log('[WS] Connected');
+      setBadge('Connected', 'connected');
+
+      // Send initiation message required by ElevenLabs Conversational AI
+      ws.send(JSON.stringify({
+        type: 'conversation_initiation_client_data',
+        conversation_config_override: {
+          agent: {
+            interaction_config: {
+              has_user_audio: false,   // chat-only — no mic
+              has_agent_audio: false,  // chat-only — no audio output
+            },
+          },
+        },
+      }));
+
+      // Keep-alive ping every 20s
+      pingInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'ping', event_id: Date.now() }));
+        }
+      }, 20000);
+
+      addMsg('system', 'Connected — type your message below to begin.');
+      setEnabled(true);
+    };
+
+    ws.onmessage = (event) => {
+      let msg;
+      try { msg = JSON.parse(event.data); }
+      catch { return; }
+
+      console.log('[WS] Message:', msg);
+
+      const type = msg.type || '';
+
+      if (type === 'conversation_initiation_metadata') {
+        // Session is confirmed — nothing to display
+        return;
+      }
+
+      if (type === 'agent_response') {
+        typingEl.classList.remove('show');
+        const text = msg.agent_response_event?.agent_response
+                  || msg.agent_response
+                  || '';
+        if (text) {
+          addMsg('agent', text);
+          setEnabled(true);
+        }
+        return;
+      }
+
+      if (type === 'audio') {
+        // Ignore audio frames — chat-only agent
+        return;
+      }
+
+      if (type === 'ping') {
+        // Echo pong back
+        ws.send(JSON.stringify({ type: 'pong', event_id: msg.event_id }));
+        return;
+      }
+
+      if (type === 'interruption' || type === 'user_transcript') {
+        return; // Not relevant for chat-only
+      }
+
+      if (type === 'error' || type === 'conversation_end') {
+        typingEl.classList.remove('show');
+        const reason = msg.message || msg.reason || 'Session ended';
+        addMsg('system', reason);
+        setBadge('Ended', 'error');
+        setEnabled(false);
+        return;
+      }
+
+      // Fallback — log unknown types for debugging
+      console.log('[WS] Unhandled type:', type, msg);
+    };
+
+    ws.onclose = (evt) => {
+      console.log('[WS] Closed:', evt.code, evt.reason);
+      clearInterval(pingInterval);
+      typingEl.classList.remove('show');
+      setBadge('Disconnected', 'error');
+      setEnabled(false);
+      addMsg('system', 'Session ended. You may close this window.');
+    };
+
+    ws.onerror = (err) => {
+      console.error('[WS] Error:', err);
+      setBadge('Error', 'error');
+      addMsg('system', 'Connection error. Please close and try again.');
+      setEnabled(false);
+    };
+  }
+
+  // ── Input events ──────────────────────────────────────────────────────────
   inputEl.addEventListener('input', () => {
     inputEl.style.height = 'auto';
     inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
   });
 
-  // Enter to send (Shift+Enter for new line)
   inputEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -377,76 +464,10 @@ async function launchHandler(req, res) {
 
   sendBtn.addEventListener('click', sendMessage);
 
-  // ── Connect to ElevenLabs ─────────────────────────────────────────────────
-  try {
-    setStatus('Connecting…');
-
-    const ElevenLabsClient = window.ElevenLabsClient || window['@11labs/client'];
-    const Conversation = ElevenLabsClient?.Conversation;
-
-    if (!Conversation) {
-      throw new Error('ElevenLabs SDK not loaded. Check network connection.');
-    }
-
-    conversation = await Conversation.startSession({
-      signedUrl,
-
-      // Disable audio completely — text/chat agent only
-      disableAudio: true,
-
-      onConnect: () => {
-        console.log('[ElevenLabs] Connected');
-        setStatus('Connected — type your message below', '');
-        statusDot.className = 'status-dot';
-        setInputEnabled(true);
-        addMessage('system', 'Connected. Type your message to begin.');
-      },
-
-      onDisconnect: () => {
-        console.log('[ElevenLabs] Disconnected');
-        setStatus('Session ended', 'error');
-        setInputEnabled(false);
-        addMessage('system', 'The session has ended. You may close this window.');
-      },
-
-      onError: (err) => {
-        console.error('[ElevenLabs] Error:', err);
-        setStatus('Connection error', 'error');
-        statusDot.className = 'status-dot error';
-        addMessage('system', 'Connection error: ' + (err?.message || String(err)));
-        setInputEnabled(false);
-      },
-
-      // Handles text messages from the agent
-      onMessage: (msg) => {
-        console.log('[ElevenLabs] Message:', msg);
-        typingEl.classList.remove('visible');
-
-        const text = msg?.message || msg?.text || msg?.content || JSON.stringify(msg);
-        const role = msg?.source === 'user' ? 'user' : 'agent';
-
-        // Only display agent messages here — user messages already added on send
-        if (role === 'agent') {
-          addMessage('agent', text);
-          setInputEnabled(true);
-        }
-      },
-
-      // Suppress any audio mode requests
-      onModeChange: (mode) => {
-        console.log('[ElevenLabs] Mode change:', mode);
-      },
-    });
-
-  } catch (err) {
-    console.error('[INIT] Failed to connect:', err);
-    setStatus('Failed to connect', 'error');
-    statusDot.className = 'status-dot error';
-    addMessage('system', 'Could not connect to AI assistant: ' + err.message);
-  }
+  // ── Start ────────────────────────────────────────────────────────────────
+  connect();
 })();
 </script>
-
 </body>
 </html>`);
 
@@ -458,19 +479,20 @@ async function launchHandler(req, res) {
   <meta charset="UTF-8"/>
   <title>Error</title>
   <style>
-    body { font-family: sans-serif; background:#0f1117; color:#e8e9f0;
+    body { font-family:sans-serif; background:#0f1117; color:#e8e9f0;
            display:flex; align-items:center; justify-content:center; min-height:100vh; }
     .box { background:#1a1d27; border:1px solid #f43f5e; border-radius:12px;
            padding:2rem; max-width:420px; text-align:center; }
     h2 { color:#f43f5e; margin-bottom:.5rem; }
     p  { color:#8b8fa8; font-size:.9rem; line-height:1.5; }
-    code { display:block; margin-top:1rem; font-size:.75rem; color:#555; }
+    code { display:block; margin-top:1rem; font-size:.75rem; color:#555a72;
+           background:#0f1117; padding:.5rem; border-radius:6px; }
   </style>
 </head>
 <body>
   <div class="box">
     <h2>⚠️ Session Error</h2>
-    <p>Could not start the AI assistant session.<br/>Please close this window and try again.</p>
+    <p>Could not start the AI assistant.<br/>Please close and try again.</p>
     <code>${err.message}</code>
   </div>
 </body>
