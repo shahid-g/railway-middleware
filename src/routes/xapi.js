@@ -336,13 +336,10 @@ async function launchHandler(req, res) {
     setEnabled(false);
     typingEl.classList.add('show');
 
-    // ElevenLabs text input message format
+    // Correct ElevenLabs text message format per official WebSocket API docs
     ws.send(JSON.stringify({
-      user_activity: {
-        type: 'conversation_interaction',
-        input_mode: 'text',
-        text: text,
-      },
+      type: 'user_message',
+      text: text,
     }));
   }
 
@@ -354,17 +351,10 @@ async function launchHandler(req, res) {
       console.log('[WS] Connected');
       setBadge('Connected', 'connected');
 
-      // Send initiation message required by ElevenLabs Conversational AI
+      // Send initiation message — minimal valid form per ElevenLabs WebSocket API docs
+      // No audio overrides needed; chat mode is configured on the agent itself in ElevenLabs dashboard
       ws.send(JSON.stringify({
         type: 'conversation_initiation_client_data',
-        conversation_config_override: {
-          agent: {
-            interaction_config: {
-              has_user_audio: false,   // chat-only — no mic
-              has_agent_audio: false,  // chat-only — no audio output
-            },
-          },
-        },
       }));
 
       // Keep-alive ping every 20s
