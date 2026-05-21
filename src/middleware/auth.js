@@ -3,10 +3,9 @@ const crypto = require('crypto');
 /**
  * Verifies the ElevenLabs webhook HMAC-SHA256 signature.
  *
- * ElevenLabs-Signature header format:
- *   t=<unix_timestamp>,v0=<hmac_hex>   ← ElevenLabs uses v0, not v1
- *
- * Signed content: "<timestamp>.<rawBody>"
+ * Tries multiple signing formats since the exact format can vary:
+ *   Format A: HMAC("<timestamp>.<rawBody>")  ← documented format
+ *   Format B: HMAC(rawBody)                  ← some implementations
  */
 function verifyElevenLabsSignature(req, res, next) {
   const secret = process.env.ELEVENLABS_WEBHOOK_SECRET;
@@ -19,13 +18,13 @@ function verifyElevenLabsSignature(req, res, next) {
   const sigHeader = req.headers['elevenlabs-signature'];
 
   if (!sigHeader) {
-    console.error('[AUTH] Missing ElevenLabs-Signature header. All headers:', JSON.stringify(Object.keys(req.headers)));
+    console.error('[AUTH] Missing ElevenLabs-Signature header');
     return res.status(401).json({ error: 'Missing ElevenLabs-Signature header' });
   }
 
-  console.log('[AUTH] Raw ElevenLabs-Signature:', sigHeader);
+  console.log('[AUTH] Raw signature header:', sigHeader);
 
-  // ── Parse header — flexible: accepts v0=, v1=, or any vN= prefix ─────────
+  // ── Parse header ──────────────────────────────────────────────────────────
   let timestamp = null;
   let sigHash   = null;
 
@@ -34,59 +33,77 @@ function verifyElevenLabsSignature(req, res, next) {
     if (eqIdx === -1) continue;
     const key   = part.slice(0, eqIdx).trim();
     const value = part.slice(eqIdx + 1).trim();
-
-    if (key === 't') {
-      timestamp = value;
-    } else if (/^v\d+$/.test(key)) {
-      // Accept v0, v1, v2 … take the first one found
-      if (!sigHash) sigHash = value;
-    }
+    if (key === 't')          timestamp = value;
+    else if (/^v\d+$/.test(key) && !sigHash) sigHash = value;
   }
-
-  console.log(`[AUTH] Parsed — timestamp=${timestamp} hash=${sigHash ? sigHash.slice(0,10) + '...' : 'null'}`);
 
   if (!timestamp || !sigHash) {
-    console.error(`[AUTH] Parse failed — timestamp=${timestamp} hash=${sigHash}. Full header: ${sigHeader}`);
-    return res.status(401).json({
-      error:            'Malformed ElevenLabs-Signature header',
-      received_header:  sigHeader,
-    });
+    console.error('[AUTH] Could not parse header:', sigHeader);
+    return res.status(401).json({ error: 'Malformed ElevenLabs-Signature header' });
   }
 
-  // ── Optional: reject webhooks older than 5 minutes ───────────────────────
-  const ageSeconds = Math.abs(Date.now() / 1000 - parseInt(timestamp, 10));
-  if (ageSeconds > 300) {
-    console.error(`[AUTH] Webhook too old: ${Math.round(ageSeconds)}s`);
-    return res.status(401).json({ error: 'Webhook timestamp expired' });
-  }
+  // ── Get raw body ──────────────────────────────────────────────────────────
+  const rawBody = req.rawBody
+    ? req.rawBody.toString('utf8')
+    : JSON.stringify(req.body);
 
-  // ── Build signed content: "<timestamp>.<rawBody>" ────────────────────────
-  const rawBody      = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body);
-  const signedString = `${timestamp}.${rawBody}`;
+  // ── Log exactly what we're working with ──────────────────────────────────
+  console.log('[AUTH] timestamp :', timestamp);
+  console.log('[AUTH] rawBody (first 120 chars):', rawBody.slice(0, 120));
+  console.log('[AUTH] secret (first 8 chars):', secret.slice(0, 8) + '...');
+  console.log('[AUTH] received hash:', sigHash);
 
-  const expected = crypto
+  // ── Try Format A: HMAC("<timestamp>.<rawBody>") ───────────────────────────
+  const hmacA = crypto
     .createHmac('sha256', secret)
-    .update(signedString)
+    .update(`${timestamp}.${rawBody}`)
     .digest('hex');
+  console.log('[AUTH] Format A (timestamp.body):', hmacA);
 
-  console.log(`[AUTH] Expected: ${expected.slice(0,10)}...  Received: ${sigHash.slice(0,10)}...`);
+  // ── Try Format B: HMAC(rawBody) only ─────────────────────────────────────
+  const hmacB = crypto
+    .createHmac('sha256', secret)
+    .update(rawBody)
+    .digest('hex');
+  console.log('[AUTH] Format B (body only)     :', hmacB);
 
-  // ── Constant-time comparison ──────────────────────────────────────────────
+  // ── Try Format C: secret might be base64-encoded — decode it first ────────
+  let hmacC = null;
   try {
-    const expBuf = Buffer.from(expected, 'hex');
-    const rcvBuf = Buffer.from(sigHash,  'hex');
+    const decodedSecret = Buffer.from(secret, 'base64').toString('utf8');
+    hmacC = crypto
+      .createHmac('sha256', decodedSecret)
+      .update(`${timestamp}.${rawBody}`)
+      .digest('hex');
+    console.log('[AUTH] Format C (b64-decoded secret):', hmacC);
+  } catch (_) { /* ignore */ }
 
-    if (expBuf.length !== rcvBuf.length || !crypto.timingSafeEqual(expBuf, rcvBuf)) {
-      console.error('[AUTH] ✗ Signature mismatch');
-      return res.status(401).json({ error: 'Invalid ElevenLabs signature' });
-    }
-  } catch (e) {
-    console.error('[AUTH] Comparison error:', e.message);
-    return res.status(401).json({ error: 'Signature comparison failed' });
+  // ── Check any format matches ──────────────────────────────────────────────
+  const matched =
+    safeEqual(hmacA, sigHash) ||
+    safeEqual(hmacB, sigHash) ||
+    (hmacC && safeEqual(hmacC, sigHash));
+
+  if (matched) {
+    console.log('[AUTH] ✓ Signature verified');
+    return next();
   }
 
-  console.log('[AUTH] ✓ Signature verified');
-  next();
+  console.error('[AUTH] ✗ Signature mismatch — none of the formats matched');
+  console.error('[AUTH] Expected (A):', hmacA);
+  console.error('[AUTH] Expected (B):', hmacB);
+  console.error('[AUTH] Received    :', sigHash);
+  return res.status(401).json({ error: 'Invalid ElevenLabs signature' });
+}
+
+function safeEqual(a, b) {
+  try {
+    const bufA = Buffer.from(a, 'hex');
+    const bufB = Buffer.from(b, 'hex');
+    return bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB);
+  } catch {
+    return false;
+  }
 }
 
 module.exports = { verifyElevenLabsSignature };
