@@ -346,6 +346,9 @@ async function launchHandler(req, res) {
   // ── Config injected server-side ──────────────────────────────────────────
   const SIGNED_URL  = ${JSON.stringify(signedUrl)};
   const USER_NAME   = ${JSON.stringify(displayName)};
+  const USER_ID     = ${JSON.stringify(userId)};
+  const COURSE_ID   = ${JSON.stringify(courseId)};
+  const COURSE_CODE = ${JSON.stringify(courseCode)};
 
   // ── DOM refs ─────────────────────────────────────────────────────────────
   const msgsEl        = document.getElementById('messages');
@@ -444,10 +447,17 @@ async function launchHandler(req, res) {
       console.log('[WS] Connected');
       setBadge('Connected', 'connected');
 
-      // Send initiation message — minimal valid form per ElevenLabs WebSocket API docs
-      // No audio overrides needed; chat mode is configured on the agent itself in ElevenLabs dashboard
+      // Send initiation message with dynamic_variables so ElevenLabs echoes them
+      // back in the post_call_transcription webhook — this is how we correlate
+      // the completed session back to the Docebo user and course.
       ws.send(JSON.stringify({
         type: 'conversation_initiation_client_data',
+        dynamic_variables: {
+          userId:     USER_ID,
+          courseId:   COURSE_ID,
+          courseCode: COURSE_CODE,
+          userName:   USER_NAME,
+        },
       }));
 
       // Keep-alive ping every 20s
