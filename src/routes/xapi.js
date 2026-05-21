@@ -249,6 +249,59 @@ async function launchHandler(req, res) {
     }
     #send-btn:hover:not(:disabled) { background: #2563eb; }
     #send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    #end-btn {
+      background: transparent;
+      color: #f43f5e;
+      border: 1px solid rgba(244,63,94,0.4);
+      border-radius: 8px;
+      padding: 0 1rem;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      height: 42px;
+      align-self: flex-end;
+      transition: background 0.15s, color 0.15s;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    #end-btn:hover:not(:disabled) {
+      background: rgba(244,63,94,0.15);
+      color: #ff6b81;
+    }
+    #end-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    /* Confirmation overlay */
+    #confirm-overlay {
+      display: none;
+      position: absolute;
+      inset: 0;
+      background: rgba(15,17,23,0.85);
+      border-radius: 16px;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+    }
+    #confirm-overlay.show { display: flex; }
+    .confirm-box {
+      background: #1a1d27;
+      border: 1px solid #f43f5e;
+      border-radius: 12px;
+      padding: 1.8rem 1.5rem;
+      text-align: center;
+      max-width: 300px;
+      width: 90%;
+    }
+    .confirm-box h3 { font-size: 1rem; margin-bottom: 0.5rem; }
+    .confirm-box p  { font-size: 0.85rem; color: #8b8fa8; margin-bottom: 1.2rem; line-height: 1.5; }
+    .confirm-btns   { display: flex; gap: 0.75rem; justify-content: center; }
+    .confirm-btns button {
+      border: none; border-radius: 8px; padding: 0.5rem 1.3rem;
+      font-size: 0.88rem; font-weight: 600; cursor: pointer; transition: opacity 0.15s;
+    }
+    .confirm-btns button:hover { opacity: 0.85; }
+    .btn-cancel { background: #2e3250; color: #e8e9f0; }
+    .btn-end    { background: #f43f5e; color: #fff; }
   </style>
 </head>
 <body>
@@ -271,6 +324,19 @@ async function launchHandler(req, res) {
   <div class="input-area">
     <textarea id="user-input" placeholder="Type your message and press Enter…" rows="1" disabled></textarea>
     <button id="send-btn" disabled>Send</button>
+    <button id="end-btn" disabled title="End this conversation">End Chat</button>
+  </div>
+
+  <!-- Confirmation overlay -->
+  <div id="confirm-overlay">
+    <div class="confirm-box">
+      <h3>End Conversation?</h3>
+      <p>Are you sure you want to end this chat session? Your transcript will be saved.</p>
+      <div class="confirm-btns">
+        <button class="btn-cancel" id="confirm-cancel">Cancel</button>
+        <button class="btn-end"    id="confirm-end">End Chat</button>
+      </div>
+    </div>
   </div>
 
 </div>
@@ -282,11 +348,15 @@ async function launchHandler(req, res) {
   const USER_NAME   = ${JSON.stringify(displayName)};
 
   // ── DOM refs ─────────────────────────────────────────────────────────────
-  const msgsEl  = document.getElementById('messages');
-  const inputEl = document.getElementById('user-input');
-  const sendBtn = document.getElementById('send-btn');
-  const typingEl= document.getElementById('typing');
-  const badge   = document.getElementById('conn-badge');
+  const msgsEl        = document.getElementById('messages');
+  const inputEl       = document.getElementById('user-input');
+  const sendBtn       = document.getElementById('send-btn');
+  const typingEl      = document.getElementById('typing');
+  const badge         = document.getElementById('conn-badge');
+  const endBtn        = document.getElementById('end-btn');
+  const confirmOverlay= document.getElementById('confirm-overlay');
+  const confirmCancel = document.getElementById('confirm-cancel');
+  const confirmEnd    = document.getElementById('confirm-end');
 
   let ws           = null;
   let pingInterval = null;
@@ -322,7 +392,30 @@ async function launchHandler(req, res) {
   function setEnabled(on) {
     inputEl.disabled = !on;
     sendBtn.disabled = !on;
+    endBtn.disabled  = !on;
     if (on) inputEl.focus();
+  }
+
+  // ── End chat ───────────────────────────────────────────────────────────────
+  function showEndConfirm() {
+    confirmOverlay.classList.add('show');
+  }
+
+  function hideEndConfirm() {
+    confirmOverlay.classList.remove('show');
+  }
+
+  function endChat() {
+    hideEndConfirm();
+    clearInterval(pingInterval);
+    typingEl.classList.remove('show');
+    setEnabled(false);
+    endBtn.disabled = true;
+    addMsg('system', 'You ended the conversation. Your transcript has been saved.');
+    setBadge('Ended', 'error');
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.close(1000, 'User ended session');
+    }
   }
 
   // ── Send message ──────────────────────────────────────────────────────────
@@ -455,6 +548,16 @@ async function launchHandler(req, res) {
   });
 
   sendBtn.addEventListener('click', sendMessage);
+
+  // ── End chat button events ───────────────────────────────────────────────
+  endBtn.addEventListener('click', showEndConfirm);
+  confirmCancel.addEventListener('click', hideEndConfirm);
+  confirmEnd.addEventListener('click', endChat);
+
+  // Close confirm if user clicks outside the box
+  confirmOverlay.addEventListener('click', (e) => {
+    if (e.target === confirmOverlay) hideEndConfirm();
+  });
 
   // ── Start ────────────────────────────────────────────────────────────────
   connect();
