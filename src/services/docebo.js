@@ -147,6 +147,8 @@ async function updateViaRestApi({
   const body = { enrollment_fields: enrollmentFields };
 
   console.log(`[Docebo] PUT ${base}/learn/v1/enrollments/${courseId}/${userId}`);
+  console.log(`[Docebo] courseId type=${typeof courseId} value=${JSON.stringify(courseId)}`);
+  console.log(`[Docebo] userId   type=${typeof userId}   value=${JSON.stringify(userId)}`);
   console.log('[Docebo] Payload:', JSON.stringify(body));
 
   let response;
