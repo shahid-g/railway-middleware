@@ -84,15 +84,14 @@ async function createSignedSession(context) {
 
   const conversationId = response.data?.conversation_id || null;
 
-  // ── Store Docebo context in memory ────────────────────────────────────────
-  // When the completion webhook fires, we look up userId + courseId by conversationId.
+  // ── Store Docebo context in memory keyed by conversationId ─────────────────
+  // Used as fallback when the webhook fires and dynamic_variables aren't present.
   if (conversationId) {
     storeSession(conversationId, context);
   } else {
-    // Some ElevenLabs versions don't return conversation_id at URL-creation time.
-    // In that case the webhook handler must extract context from the webhook payload directly.
-    console.warn('[ElevenLabs] No conversation_id returned at session creation — context will be read from webhook payload');
+    console.warn('[ElevenLabs] No conversation_id at session creation — will rely on dynamic_variables in webhook');
   }
+
 
   console.log(`[ElevenLabs] ✓ Signed URL ready — conv=${conversationId} url=${signedUrl}`);
 
