@@ -17,8 +17,7 @@ router.post('/done', async (req, res) => {
 
   try {
     const payload = req.body;
-    console.log('[ElevenLabs Webhook] type:', payload.type);
-    console.log('[ElevenLabs Webhook] payload:', JSON.stringify(payload, null, 2));
+    console.log(`[ElevenLabs Webhook] type=${payload.type}`);
 
     // Only handle post_call_transcription
     if (payload.type && payload.type !== 'post_call_transcription') {
@@ -37,7 +36,6 @@ router.post('/done', async (req, res) => {
     const summary        = analysis.transcript_summary || '';
 
     console.log(`[ElevenLabs Webhook] conv=${conversationId} duration=${durationSecs}s`);
-    console.log('[ElevenLabs Webhook] dynamic_variables:', JSON.stringify(dynamicVars));
 
     // ── Resolve Docebo user/course context ────────────────────────────────
     // Priority 1: dynamic_variables sent at session start
@@ -55,8 +53,7 @@ router.post('/done', async (req, res) => {
     }
 
     if (!userId || !courseId) {
-      console.error('[ElevenLabs Webhook] Cannot update Docebo — userId/courseId not found');
-      console.error('[ElevenLabs Webhook] dynamic_variables was:', JSON.stringify(dynamicVars));
+      console.error('[ElevenLabs Webhook] Cannot update Docebo — userId/courseId missing. conv=' + conversationId);
       return;
     }
 

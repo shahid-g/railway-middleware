@@ -5,8 +5,6 @@ const elevenLabsService = require('../services/elevenlabs');
 async function launchHandler(req, res) {
   try {
     const params = Object.assign({}, req.query, req.body);
-    console.log(`[LAUNCH] ${req.method} ${req.originalUrl}`);
-    console.log('[LAUNCH] Params:', JSON.stringify(params, null, 2));
 
     const userId     = params.user_id     || params.userId     || '';
     const courseId   = params.course_id   || params.courseId   || '';
@@ -29,7 +27,6 @@ async function launchHandler(req, res) {
       }
     }
 
-    console.log(`[LAUNCH] user=${userId} course=${courseId} email=${userEmail} name=${userName}`);
 
     if (!userId || !courseId) {
       return res.status(400).json({
@@ -444,7 +441,6 @@ async function launchHandler(req, res) {
     ws = new WebSocket(SIGNED_URL);
 
     ws.onopen = () => {
-      console.log('[WS] Connected');
       setBadge('Connected', 'connected');
 
       // Send initiation message with dynamic_variables so ElevenLabs echoes them
@@ -476,7 +472,6 @@ async function launchHandler(req, res) {
       try { msg = JSON.parse(event.data); }
       catch { return; }
 
-      console.log('[WS] Message:', msg);
 
       const type = msg.type || '';
 
@@ -524,11 +519,9 @@ async function launchHandler(req, res) {
       }
 
       // Fallback — log unknown types for debugging
-      console.log('[WS] Unhandled type:', type, msg);
     };
 
     ws.onclose = (evt) => {
-      console.log('[WS] Closed:', evt.code, evt.reason);
       clearInterval(pingInterval);
       typingEl.classList.remove('show');
       setBadge('Disconnected', 'error');
@@ -537,7 +530,6 @@ async function launchHandler(req, res) {
     };
 
     ws.onerror = (err) => {
-      console.error('[WS] Error:', err);
       setBadge('Error', 'error');
       addMsg('system', 'Connection error. Please close and try again.');
       setEnabled(false);
