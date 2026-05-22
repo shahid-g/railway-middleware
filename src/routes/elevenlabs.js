@@ -1,47 +1,33 @@
-const express   = require('express');
-const router    = express.Router();
-const { verifyElevenLabsSignature } = require('../middleware/auth');
-const doceboService                 = require('../services/docebo');
-const { getSession }                = require('../services/elevenlabs');
+const express        = require('express');
+const router         = express.Router();
+const { verifyWebhookToken } = require('../middleware/auth');
+const doceboService  = require('../services/docebo');
+const { getSession } = require('../services/elevenlabs');
 
 /**
- * POST /webhooks/elevenlabs/done
+ * POST /webhooks/elevenlabs/:token/done
  *
- * Fired by ElevenLabs when a Conversational AI session ends (post_call_transcription).
- *
- * Official ElevenLabs webhook payload structure:
- * {
- *   "type": "post_call_transcription",
- *   "event_timestamp": 1739537297,
- *   "data": {
- *     "agent_id": "...",
- *     "conversation_id": "...",
- *     "status": "done",
- *     "transcript": [ { "role": "agent"|"user", "message": "...", ... } ],
- *     "metadata": { "call_duration_secs": 22, ... },
- *     "analysis": { "transcript_summary": "...", "call_successful": "success", ... },
- *     "conversation_initiation_client_data": { "dynamic_variables": { ... } }
- *   }
- * }
+ * The :token segment is a secret known only to Railway and ElevenLabs.
+ * Configure this full URL in ElevenLabs webhook settings:
+ *   https://your-app.up.railway.app/webhooks/elevenlabs/<YOUR_TOKEN>/done
  */
-router.post('/done', verifyElevenLabsSignature, async (req, res) => {
-  // ACK immediately — ElevenLabs requires a fast 200
-  // Note: 4xx errors are NOT retried by ElevenLabs, only 5xx/429/408
+router.post('/done', async (req, res) => {
+  // ACK immediately
   res.status(200).json({ received: true });
 
   try {
     const payload = req.body;
-    console.log('[ElevenLabs Webhook] Received type:', payload.type);
-    console.log('[ElevenLabs Webhook] Full payload:', JSON.stringify(payload, null, 2));
+    console.log('[ElevenLabs Webhook] type:', payload.type);
+    console.log('[ElevenLabs Webhook] payload:', JSON.stringify(payload, null, 2));
 
-    // Only process post_call_transcription events
+    // Only handle post_call_transcription
     if (payload.type && payload.type !== 'post_call_transcription') {
-      console.log(`[ElevenLabs Webhook] Ignoring event type: ${payload.type}`);
+      console.log(`[ElevenLabs Webhook] Skipping type: ${payload.type}`);
       return;
     }
 
-    // ── Extract from correct nested structure ─────────────────────────────
-    const data           = payload.data           || payload; // fallback if not nested
+    // ── Extract from nested data structure ────────────────────────────────
+    const data           = payload.data           || payload;
     const conversationId = data.conversation_id;
     const transcript     = data.transcript        || [];
     const metadata       = data.metadata          || {};
@@ -50,11 +36,12 @@ router.post('/done', verifyElevenLabsSignature, async (req, res) => {
     const durationSecs   = metadata.call_duration_secs || 0;
     const summary        = analysis.transcript_summary || '';
 
-    console.log(`[ElevenLabs Webhook] conversation_id=${conversationId} duration=${durationSecs}s`);
+    console.log(`[ElevenLabs Webhook] conv=${conversationId} duration=${durationSecs}s`);
+    console.log('[ElevenLabs Webhook] dynamic_variables:', JSON.stringify(dynamicVars));
 
     // ── Resolve Docebo user/course context ────────────────────────────────
-    // Priority 1: dynamic_variables set at session initiation
-    // Priority 2: in-memory session store keyed by conversationId
+    // Priority 1: dynamic_variables sent at session start
+    // Priority 2: in-memory session store
     let userId   = dynamicVars.userId   || dynamicVars.user_id;
     let courseId = dynamicVars.courseId || dynamicVars.course_id;
 
@@ -68,13 +55,12 @@ router.post('/done', verifyElevenLabsSignature, async (req, res) => {
     }
 
     if (!userId || !courseId) {
-      console.error('[ElevenLabs Webhook] Cannot update Docebo — userId/courseId not resolved.');
-      console.error('[ElevenLabs Webhook] dynamic_variables:', JSON.stringify(dynamicVars));
-      console.error('[ElevenLabs Webhook] conversationId:', conversationId);
+      console.error('[ElevenLabs Webhook] Cannot update Docebo — userId/courseId not found');
+      console.error('[ElevenLabs Webhook] dynamic_variables was:', JSON.stringify(dynamicVars));
       return;
     }
 
-    // ── Format transcript as readable text ────────────────────────────────
+    // ── Format transcript ─────────────────────────────────────────────────
     const transcriptText = transcript
       .map(t => `[${(t.role || 'UNKNOWN').toUpperCase()}]: ${t.message || ''}`)
       .join('\n');
@@ -84,11 +70,11 @@ router.post('/done', verifyElevenLabsSignature, async (req, res) => {
       courseId,
       conversationId,
       transcriptText,
-      transcriptRaw: transcript,
+      transcriptRaw:  transcript,
       summary,
-      scores:        analysis.evaluation_criteria_results || {},
+      scores:         analysis.evaluation_criteria_results || {},
       durationSecs,
-      completedAt:   new Date().toISOString(),
+      completedAt:    new Date().toISOString(),
     };
 
     const method = process.env.DOCEBO_UPDATE_METHOD || 'both';
@@ -98,7 +84,7 @@ router.post('/done', verifyElevenLabsSignature, async (req, res) => {
         await doceboService.updateViaRestApi(updatePayload);
         console.log(`[ElevenLabs Webhook] ✓ Docebo REST updated — user=${userId} course=${courseId}`);
       } catch (err) {
-        console.error('[ElevenLabs Webhook] Docebo REST update failed:', err.message);
+        console.error('[ElevenLabs Webhook] REST update failed:', err.message);
       }
     }
 
