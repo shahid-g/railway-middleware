@@ -141,8 +141,7 @@ async function updateViaRestApi({
 
   const body = { enrollment_fields: enrollmentFields };
 
-  console.log(`[Docebo] PUT ${base}/learn/v1/enrollments/${courseId}/${userId}`);
-  console.log('[Docebo] Body:', JSON.stringify(body, null, 2));
+  console.log(`[Docebo] Updating enrollment — course=${courseId} user=${userId}`);
 
   let response;
   try {
@@ -163,7 +162,7 @@ async function updateViaRestApi({
     throw new Error(`Docebo enrollment update failed (${status}): ${detail}`);
   }
 
-  console.log('[Docebo] ✓ Enrollment updated. Response:', JSON.stringify(response.data));
+  console.log('[Docebo] ✓ Enrollment updated');
   return response.data;
 }
 
