@@ -4,7 +4,21 @@ const { v4: uuidv4 } = require('uuid');
 // ── OAuth2 token cache ────────────────────────────────────────────────────────
 let _tokenCache = { token: null, expiresAt: 0 };
 
-async function getDoceboToken() {
+/**
+ * Step 1 — Get Docebo access token via POST /oauth2/token
+ *
+ * Credentials sent as form data (application/x-www-form-urlencoded):
+ *   client_id, client_secret, grant_type, scope, username, password
+ *
+ * Required env vars:
+ *   DOCEBO_BASE_URL, DOCEBO_CLIENT_ID, DOCEBO_CLIENT_SECRET,
+ *   DOCEBO_GRANT_TYPE  (default: password)
+ *   DOCEBO_SCOPE       (default: api)
+ *   DOCEBO_USERNAME
+ *   DOCEBO_PASSWORD
+ */
+async function getAccessToken() {
+  // Return cached token if still valid (refresh 60s early)
   if (_tokenCache.token && Date.now() < _tokenCache.expiresAt) {
     return _tokenCache.token;
   }
@@ -12,99 +26,150 @@ async function getDoceboToken() {
   const base   = process.env.DOCEBO_BASE_URL;
   const id     = process.env.DOCEBO_CLIENT_ID;
   const secret = process.env.DOCEBO_CLIENT_SECRET;
+  const grant  = process.env.DOCEBO_GRANT_TYPE  || 'password';
+  const scope  = process.env.DOCEBO_SCOPE        || 'api';
+  const uname  = process.env.DOCEBO_USERNAME;
+  const pwd    = process.env.DOCEBO_PASSWORD;
 
-  if (!base || !id || !secret) {
-    throw new Error('Missing Docebo credentials (DOCEBO_BASE_URL / DOCEBO_CLIENT_ID / DOCEBO_CLIENT_SECRET)');
+  if (!base || !id || !secret || !uname || !pwd) {
+    throw new Error(
+      'Missing Docebo credentials. Required: DOCEBO_BASE_URL, DOCEBO_CLIENT_ID, ' +
+      'DOCEBO_CLIENT_SECRET, DOCEBO_USERNAME, DOCEBO_PASSWORD'
+    );
   }
 
-  const params = new URLSearchParams({
-    grant_type:    'client_credentials',
+  const formData = new URLSearchParams({
     client_id:     id,
     client_secret: secret,
+    grant_type:    grant,
+    scope,
+    username:      uname,
+    password:      pwd,
   });
 
-  const response = await axios.post(
-    `${base}/oauth2/token`,
-    params.toString(),
-    { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 10000 }
-  );
+  console.log(`[Docebo] Requesting access token from ${base}/oauth2/token`);
+
+  let response;
+  try {
+    response = await axios.post(
+      `${base}/oauth2/token`,
+      formData.toString(),
+      {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        timeout: 15000,
+      }
+    );
+  } catch (err) {
+    const status = err.response?.status;
+    const detail = JSON.stringify(err.response?.data || err.message);
+    throw new Error(`Docebo token request failed (${status}): ${detail}`);
+  }
 
   const { access_token, expires_in } = response.data;
+  if (!access_token) {
+    throw new Error(`Docebo token response missing access_token: ${JSON.stringify(response.data)}`);
+  }
+
+  // Cache token — refresh 60s before expiry
   _tokenCache = {
     token:     access_token,
-    expiresAt: Date.now() + (expires_in - 60) * 1000,
+    expiresAt: Date.now() + ((expires_in || 3600) - 60) * 1000,
   };
 
-  console.log('[Docebo] OAuth2 token refreshed');
+  console.log('[Docebo] ✓ Access token obtained');
   return access_token;
 }
 
-async function doceboClient() {
-  const token = await getDoceboToken();
-  return axios.create({
-    baseURL: process.env.DOCEBO_BASE_URL,
-    headers: {
-      Authorization:  `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    timeout: 15000,
-  });
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
-// Option A — Update Docebo via REST API
+// Step 2 — Update enrollment via PUT /learn/v1/enrollments/{course_id}/{user_id}
+//
+// Required env vars:
+//   DOCEBO_BASE_URL         — base URL
+//   DOCEBO_TRANSCRIPT_FIELD — enrollment field ID to store the transcript
+//                             e.g. "transcript" or a numeric ID like "12"
+//
+// Optional env vars:
+//   DOCEBO_SUMMARY_FIELD    — field ID to store the AI summary (if needed)
+//   DOCEBO_DURATION_FIELD   — field ID to store call duration in seconds
+//   DOCEBO_CONV_ID_FIELD    — field ID to store the ElevenLabs conversation ID
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Marks the enrollment complete and stores transcript + metadata
- * in Docebo custom additional_fields.
+ * Updates a Docebo enrollment with transcript and metadata from ElevenLabs.
  *
- * Adjust the endpoint path and field key names to match your
- * Docebo API version and custom field configuration.
+ * @param {object} params
+ * @param {string} params.userId
+ * @param {string} params.courseId
+ * @param {string} params.transcriptText   — formatted transcript string
+ * @param {string} params.conversationId   — ElevenLabs conversation ID
+ * @param {string} params.summary          — AI summary from ElevenLabs analysis
+ * @param {number} params.durationSecs     — call duration in seconds
+ * @param {string} params.completedAt      — ISO timestamp of completion
  */
 async function updateViaRestApi({
   userId,
   courseId,
-  conversationId,
   transcriptText,
+  conversationId,
   summary,
-  scores,
   durationSecs,
   completedAt,
 }) {
-  const client = await doceboClient();
+  const base            = process.env.DOCEBO_BASE_URL;
+  const transcriptField = process.env.DOCEBO_TRANSCRIPT_FIELD;
+  const summaryField    = process.env.DOCEBO_SUMMARY_FIELD    || null;
+  const durationField   = process.env.DOCEBO_DURATION_FIELD   || null;
+  const convIdField     = process.env.DOCEBO_CONV_ID_FIELD    || null;
 
-  // 1. Mark enrollment as completed
-  await client.put(`/api/lms/v1/enrollment/${courseId}/user/${userId}`, {
-    status:        'completed',
-    completion_at: completedAt,
-  });
+  if (!transcriptField) {
+    throw new Error('DOCEBO_TRANSCRIPT_FIELD env var is not set');
+  }
 
-  // 2. Write transcript + ElevenLabs metadata to custom fields
-  const transcriptTrimmed = transcriptText.length > 5000
-    ? transcriptText.slice(0, 4990) + '…'
-    : transcriptText;
+  // ── Get fresh access token ────────────────────────────────────────────────
+  const token = await getAccessToken();
 
-  await client.put(`/api/lms/v1/enrollment/${courseId}/user/${userId}`, {
-    additional_fields: [
-      { key: 'elevenlabs_conversation_id', value: conversationId || '' },
-      { key: 'elevenlabs_transcript',      value: transcriptTrimmed },
-      { key: 'elevenlabs_summary',         value: summary || '' },
-      { key: 'elevenlabs_duration_secs',   value: String(durationSecs) },
-      { key: 'elevenlabs_completed_at',    value: completedAt },
-      { key: 'elevenlabs_scores',          value: JSON.stringify(scores) },
-    ],
-  });
+  // ── Build enrollment_fields payload ──────────────────────────────────────
+  const enrollmentFields = {};
+
+  // Always write transcript
+  enrollmentFields[transcriptField] = transcriptText || '';
+
+  // Write optional fields only if env vars are configured
+  if (summaryField  && summary)         enrollmentFields[summaryField]  = summary;
+  if (durationField && durationSecs)    enrollmentFields[durationField] = String(durationSecs);
+  if (convIdField   && conversationId)  enrollmentFields[convIdField]   = conversationId;
+
+  const body = { enrollment_fields: enrollmentFields };
+
+  console.log(`[Docebo] PUT ${base}/learn/v1/enrollments/${courseId}/${userId}`);
+  console.log('[Docebo] Body:', JSON.stringify(body, null, 2));
+
+  let response;
+  try {
+    response = await axios.put(
+      `${base}/learn/v1/enrollments/${courseId}/${userId}`,
+      body,
+      {
+        headers: {
+          Authorization:  `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: 15000,
+      }
+    );
+  } catch (err) {
+    const status = err.response?.status;
+    const detail = JSON.stringify(err.response?.data || err.message);
+    throw new Error(`Docebo enrollment update failed (${status}): ${detail}`);
+  }
+
+  console.log('[Docebo] ✓ Enrollment updated. Response:', JSON.stringify(response.data));
+  return response.data;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Option B — Update Docebo via xAPI Statement (write-back to Docebo LRS)
+// xAPI write-back (optional — only called if DOCEBO_UPDATE_METHOD includes xapi)
 // ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Sends a "completed" xAPI statement to Docebo's LRS endpoint,
- * carrying the full transcript and metadata in result.extensions.
- */
 async function updateViaXapi({
   userId,
   courseId,
@@ -120,13 +185,12 @@ async function updateViaXapi({
   const apiKey   = process.env.XAPI_KEY;
 
   if (!endpoint || !apiKey) {
-    throw new Error('Missing xAPI config (XAPI_ENDPOINT or XAPI_KEY)');
+    throw new Error('Missing xAPI config: XAPI_ENDPOINT and XAPI_KEY are required');
   }
 
   const statement = {
     id:        uuidv4(),
     timestamp: completedAt,
-
     actor: {
       objectType: 'Agent',
       account: {
@@ -134,21 +198,18 @@ async function updateViaXapi({
         name:     String(userId),
       },
     },
-
     verb: {
       id:      'http://adlnet.gov/expapi/verbs/completed',
       display: { 'en-US': 'completed' },
     },
-
     object: {
       objectType: 'Activity',
       id:         `${process.env.DOCEBO_BASE_URL}/course/${courseId}`,
       definition: {
         type: 'http://adlnet.gov/expapi/activities/course',
-        name: { 'en-US': `Docebo Course ${courseId}` },
+        name: { 'en-US': `Course ${courseId}` },
       },
     },
-
     result: {
       success:    true,
       completion: true,
@@ -156,42 +217,26 @@ async function updateViaXapi({
       response:   transcriptText,
       extensions: {
         'https://elevenlabs.io/xapi/conversation-id': conversationId,
-        'https://elevenlabs.io/xapi/transcript':      transcriptRaw,
         'https://elevenlabs.io/xapi/summary':         summary,
         'https://elevenlabs.io/xapi/scores':          scores,
       },
     },
-
-    context: {
-      platform: 'ElevenLabs Conversational AI',
-      extensions: {
-        'https://docebo.com/xapi/course-id': courseId,
-        'https://docebo.com/xapi/user-id':   userId,
-      },
-    },
   };
 
-  await axios.post(
-    `${endpoint}/statements`,
-    statement,
-    {
-      headers: {
-        Authorization:               `Basic ${apiKey}`,
-        'Content-Type':              'application/json',
-        'X-Experience-API-Version':  '1.0.3',
-      },
-      timeout: 15000,
-    }
-  );
+  await axios.post(`${endpoint}/statements`, statement, {
+    headers: {
+      Authorization:              `Basic ${apiKey}`,
+      'Content-Type':             'application/json',
+      'X-Experience-API-Version': '1.0.3',
+    },
+    timeout: 15000,
+  });
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helper
-// ─────────────────────────────────────────────────────────────────────────────
-function formatIsoDuration(totalSeconds) {
-  const h = Math.floor(totalSeconds / 3600);
-  const m = Math.floor((totalSeconds % 3600) / 60);
-  const s = Math.floor(totalSeconds % 60);
+function formatIsoDuration(secs) {
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = Math.floor(secs % 60);
   let iso = 'PT';
   if (h) iso += `${h}H`;
   if (m) iso += `${m}M`;
