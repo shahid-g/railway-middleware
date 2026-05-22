@@ -115,14 +115,18 @@ async function updateViaRestApi({
   durationSecs,
   completedAt,
 }) {
-  const base            = process.env.DOCEBO_BASE_URL;
-  const transcriptField = process.env.DOCEBO_TRANSCRIPT_FIELD;
-  const summaryField    = process.env.DOCEBO_SUMMARY_FIELD    || null;
-  const durationField   = process.env.DOCEBO_DURATION_FIELD   || null;
-  const convIdField     = process.env.DOCEBO_CONV_ID_FIELD    || null;
+  const base = process.env.DOCEBO_BASE_URL;
+
+  // Strip surrounding quotes in case Railway variables were set with "value"
+  const stripQuotes = (v) => v ? v.replace(/^["']|["']$/g, '').trim() : null;
+
+  const transcriptField = stripQuotes(process.env.DOCEBO_TRANSCRIPT_FIELD);
+  const summaryField    = stripQuotes(process.env.DOCEBO_SUMMARY_FIELD);
+  const durationField   = stripQuotes(process.env.DOCEBO_DURATION_FIELD);
+  const convIdField     = stripQuotes(process.env.DOCEBO_CONV_ID_FIELD);
 
   if (!transcriptField) {
-    throw new Error('DOCEBO_TRANSCRIPT_FIELD env var is not set');
+    throw new Error('DOCEBO_TRANSCRIPT_FIELD env var is not set (current value: ' + JSON.stringify(process.env.DOCEBO_TRANSCRIPT_FIELD) + ')');
   }
 
   // ── Get fresh access token ────────────────────────────────────────────────
