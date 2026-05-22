@@ -62,6 +62,7 @@ async function getAccessToken() {
   } catch (err) {
     const status = err.response?.status;
     const detail = JSON.stringify(err.response?.data || err.message);
+    console.error(`[Docebo] ✗ Token request failed (${status}): ${detail}`);
     throw new Error(`Docebo token request failed (${status}): ${detail}`);
   }
 
@@ -145,7 +146,8 @@ async function updateViaRestApi({
 
   const body = { enrollment_fields: enrollmentFields };
 
-  console.log(`[Docebo] Updating enrollment — course=${courseId} user=${userId}`);
+  console.log(`[Docebo] PUT ${base}/learn/v1/enrollments/${courseId}/${userId}`);
+  console.log('[Docebo] Payload:', JSON.stringify(body));
 
   let response;
   try {
@@ -161,8 +163,13 @@ async function updateViaRestApi({
       }
     );
   } catch (err) {
-    const status = err.response?.status;
-    const detail = JSON.stringify(err.response?.data || err.message);
+    const status  = err.response?.status;
+    const detail  = JSON.stringify(err.response?.data || err.message);
+    const headers = JSON.stringify(err.response?.headers || {});
+    console.error(`[Docebo] ✗ Enrollment update failed`);
+    console.error(`[Docebo] Status : ${status}`);
+    console.error(`[Docebo] Detail : ${detail}`);
+    console.error(`[Docebo] Headers: ${headers}`);
     throw new Error(`Docebo enrollment update failed (${status}): ${detail}`);
   }
 
