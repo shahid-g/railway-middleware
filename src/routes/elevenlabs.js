@@ -36,6 +36,7 @@ router.post('/done', async (req, res) => {
     const summary        = analysis.transcript_summary || '';
 
     console.log(`[ElevenLabs Webhook] conv=${conversationId} duration=${durationSecs}s`);
+    console.log('[ElevenLabs Webhook] dynamic_variables raw:', JSON.stringify(dynamicVars));
 
     // ── Resolve Docebo user/course context ────────────────────────────────
     // Priority 1: dynamic_variables sent at session start
