@@ -41,8 +41,11 @@ router.post('/done', async (req, res) => {
     // ── Resolve Docebo user/course context ────────────────────────────────
     // Priority 1: dynamic_variables sent at session start
     // Priority 2: in-memory session store
-    let userId   = dynamicVars.userId   || dynamicVars.user_id;
-    let courseId = dynamicVars.courseId || dynamicVars.course_id;
+    // Flatten arrays — courseId may arrive as ["5062","5062"] if Docebo sent it as repeated param
+    const toScalar = (v) => !v ? null : Array.isArray(v) ? String(v[0]) : String(v);
+
+    let userId   = toScalar(dynamicVars.userId   || dynamicVars.user_id);
+    let courseId = toScalar(dynamicVars.courseId || dynamicVars.course_id);
 
     if ((!userId || !courseId) && conversationId) {
       const stored = getSession(conversationId);

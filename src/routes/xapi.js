@@ -6,8 +6,16 @@ async function launchHandler(req, res) {
   try {
     const params = Object.assign({}, req.query, req.body);
 
-    const userId     = params.user_id     || params.userId     || '';
-    const courseId   = params.course_id   || params.courseId   || '';
+    // Extract scalar value — Docebo may send course_id/user_id as repeated
+    // query params which Express parses as arrays e.g. ["5062","5062"]
+    const toScalar = (v) => {
+      if (!v) return '';
+      if (Array.isArray(v)) return String(v[0]); // take first value
+      return String(v);
+    };
+
+    const userId   = toScalar(params.user_id   || params.userId);
+    const courseId = toScalar(params.course_id || params.courseId);
     const username   = params.username    || '';
     const courseCode = params.course_code || params.courseCode || '';
 
